@@ -50,6 +50,7 @@ import { ThemeProvider, useTheme, usePalette } from "./theme";
 import {
   loadProjects,
   saveProject,
+  
   deleteProject,
   loadCurrencies,
   saveCurrencies,
@@ -4702,6 +4703,7 @@ function AppInner({ onLogout }) {
       loadSettledBaseline(),
       loadCEOImages(),
       loadPaymentMethods(),
+      loadSettlements(), // ← add this
       loadChannels(),
     ])
       .then(([p, c, e, sb, ci, pm, ch]) => {
@@ -5406,13 +5408,7 @@ function AppInner({ onLogout }) {
             />
           )}
           {tab === "expenses" && (
-            <Expenses
-              currencies={currencies}
-              onLog={async (e) => {
-                await addLog(e);
-                setExpenses(await loadExpenses());
-              }}
-            />
+            <Expenses currencies={currencies} onLog={addLog} />
           )}
           {tab === "invoice" && (
             <InvoiceGen
@@ -5502,3 +5498,4 @@ export default function App() {
     </ThemeProvider>
   );
 }
+

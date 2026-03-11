@@ -26,7 +26,6 @@ export const CHANNELS = {
   rakib: [
     "Rakib-WISE",
     "Rakib-DBBL(A)",
-    "Rakib-PayPal",
     "Rakib-Bank",
     "Rakib-bKash",
     "Rakib-Payoneer",

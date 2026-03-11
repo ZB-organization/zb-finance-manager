@@ -1,67 +1,23 @@
 /**
- * ZBFinanceManager — Database Adapter v4 (Hybrid Fixed)
- * ═══════════════════════════════════════════════════════
- * FIX: On new browser/device with empty localStorage,
- *      load functions now WAIT for Firestore instead of
- *      returning empty arrays immediately.
+ * ZBFinanceManager — Database Adapter v8
+ * ════════════════════════════════════════
+ * FIXES over v7:
+ *  - Removed Firebase Storage (Spark plan incompatible) — replaced with
+ *    canvas compression so images stay small enough for Firestore directly
+ *  - Fixed saveCEOImages crash (undefined `urls` variable)
+ *  - _syncAllToFirestore now runs ONCE per session, not every page load
+ *  - iconBase64 in channels + payment methods auto-compressed before Firestore
+ *  - _K declared before initFirebase to avoid reference fragility
+ *  - Added loadSettlements to _syncAllToFirestore (was missing)
+ *  - Exported compressImage so components can use it if needed
  *
- * Reads  → localStorage if data exists (instant)
- *        → Firestore if localStorage empty (new device)
- * Writes → localStorage immediately + Firestore background
- * Auth   → One master password stored in Firestore, cached locally
+ * Image size targets (canvas compression, no paid Firebase Storage needed):
+ *   CEO photos       → max 200×200px, quality 0.72  (~30–60 KB)
+ *   Channel icons    → max  64×64px,  quality 0.85  (~5–15 KB)
+ *   Payment icons    → max  64×64px,  quality 0.85  (~5–15 KB)
  */
 
-// ─── Firebase bootstrap ───────────────────────────────────────────────
-let _db = null;
-let _fbReady = false;
-let _initPromise = null;
-
-function initFirebase() {
-  if (_initPromise) return _initPromise;
-  _initPromise = (async () => {
-    try {
-      const cfg = (await import("./firebaseConfig.js")).default;
-      if (!cfg?.projectId) throw new Error("Invalid config");
-
-      const { initializeApp, getApps, getApp } = await import("firebase/app");
-      const { getFirestore, enableIndexedDbPersistence } = await import(
-        "firebase/firestore"
-      );
-
-      const app = getApps().length ? getApp() : initializeApp(cfg);
-      _db = getFirestore(app);
-
-      try {
-        await enableIndexedDbPersistence(_db);
-      } catch {}
-
-      _fbReady = true;
-      console.info(
-        `%c[ZBFinance] Firebase connected → ${cfg.projectId}`,
-        "color:#06b6d4;font-weight:bold",
-      );
-    } catch (e) {
-      _db = null;
-      _fbReady = false;
-      const isNotFound =
-        e.message?.includes("Cannot find module") ||
-        e.message?.includes("Failed to resolve");
-      if (!isNotFound)
-        console.warn(
-          "[ZBFinance] Firebase unavailable, local-only mode:",
-          e.message,
-        );
-    }
-  })();
-  return _initPromise;
-}
-
-// Start connecting immediately on module load
-initFirebase();
-
-export const isUsingFirebase = () => _fbReady;
-
-// ─── localStorage keys ────────────────────────────────────────────────
+// ─── localStorage keys (declared first — used by initFirebase callbacks) ──
 const _K = {
   projects: "zbfm_projects",
   currencies: "zbfm_currencies",
@@ -76,6 +32,7 @@ const _K = {
   ceoImages: "zbfm_ceo_images",
   channels: "zbfm_channels",
   paymentMethods: "zbfm_payment_methods",
+  syncedSession: "zbfm_synced_session", // flag: only sync once per session
 };
 
 const ls = {
@@ -94,26 +51,174 @@ const ls = {
   },
 };
 
-// ─── Firestore internal helpers ───────────────────────────────────────
+// ─── Firebase bootstrap ───────────────────────────────────────────────
+let _db = null;
+let _fbReady = false;
+let _initPromise = null;
+
+const _pendingWrites = []; // writes queued before Firebase connects
+
+function initFirebase() {
+  if (_initPromise) return _initPromise;
+  _initPromise = (async () => {
+    try {
+      const cfg = (await import("./firebaseConfig.js")).default;
+      if (!cfg?.projectId) throw new Error("Invalid config");
+
+      const { initializeApp, getApps, getApp } = await import("firebase/app");
+      const app = getApps().length ? getApp() : initializeApp(cfg);
+
+      // Modern persistence — falls back to basic getFirestore if already init'd
+      try {
+        const {
+          initializeFirestore,
+          persistentLocalCache,
+          persistentMultipleTabManager,
+        } = await import("firebase/firestore");
+        _db = initializeFirestore(app, {
+          cache: persistentLocalCache({
+            tabManager: persistentMultipleTabManager(),
+          }),
+        });
+      } catch {
+        const { getFirestore } = await import("firebase/firestore");
+        _db = getFirestore(app);
+      }
+
+      _fbReady = true;
+      console.info(
+        `%c[ZBFinance] Firebase connected → ${cfg.projectId}`,
+        "color:#06b6d4;font-weight:bold",
+      );
+
+      // Flush writes that were queued before Firebase was ready
+      _flushPendingWrites();
+
+      // Sync localStorage → Firestore ONCE per browser session
+      // (not every page load — avoids flooding Firestore with writes)
+      const sessionKey = sessionStorage.getItem(_K.syncedSession);
+      if (!sessionKey) {
+        sessionStorage.setItem(_K.syncedSession, "1");
+        _syncAllToFirestore();
+      }
+    } catch (e) {
+      _db = null;
+      _fbReady = false;
+      const silent =
+        e.message?.includes("Cannot find module") ||
+        e.message?.includes("Failed to resolve") ||
+        e.message?.includes("already been");
+      if (!silent) console.warn("[ZBFinance] Firebase unavailable:", e.message);
+    }
+  })();
+  return _initPromise;
+}
+
+async function _flushPendingWrites() {
+  if (!_pendingWrites.length) return;
+  console.info(
+    `[ZBFinance] Flushing ${_pendingWrites.length} queued writes...`,
+  );
+  for (const { col, id, data } of _pendingWrites) {
+    await _fsSaveAwait(col, id, data).catch((e) =>
+      console.warn(
+        `[ZBFinance] Queued write failed (${col}/${id}):`,
+        e.message,
+      ),
+    );
+  }
+  _pendingWrites.length = 0;
+}
+
+// Push all localStorage data to Firestore — runs ONCE per browser session
+async function _syncAllToFirestore() {
+  const cols = [
+    { lsKey: _K.projects, fsCol: "projects" },
+    { lsKey: _K.payments, fsCol: "payments" },
+    { lsKey: _K.expenses, fsCol: "expenses" },
+    { lsKey: _K.settlements, fsCol: "settlements" },
+    { lsKey: _K.activity, fsCol: "activity" },
+  ];
+
+  for (const { lsKey, fsCol } of cols) {
+    const items = ls.get(lsKey) || [];
+    for (const item of items) {
+      await _fsSaveAwait(fsCol, item.id, item).catch(() => {});
+    }
+  }
+
+  // Config docs
+  const currencies = ls.get(_K.currencies);
+  if (currencies) _fsSave("config", "currencies", { list: currencies });
+
+  // Sync settled baseline
+  const baseline = ls.get(_K.settledBaseline);
+  if (baseline !== null && baseline !== undefined) {
+    _fsSave("config", "settledBaseline", {
+      data: baseline,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  // Sync CEO images (stored as separate docs per CEO)
+  const ceoImgs = ls.get(_K.ceoImages);
+  if (ceoImgs?.sumaiya)
+    _fsSave("config", "ceoImage_sumaiya", {
+      data: ceoImgs.sumaiya,
+      updatedAt: new Date().toISOString(),
+    });
+  if (ceoImgs?.rakib)
+    _fsSave("config", "ceoImage_rakib", {
+      data: ceoImgs.rakib,
+      updatedAt: new Date().toISOString(),
+    });
+
+  const channels = ls.get(_K.channels);
+  if (channels) {
+    const compressed = await _compressAllImages(channels, 64, 0.85);
+    _fsSave("config", "channels", { list: compressed });
+  }
+
+  const methods = ls.get(_K.paymentMethods);
+  if (methods?.length) {
+    const compressed = await _compressAllImages(methods, 64, 0.85);
+    _fsSave("config", "paymentMethods", { list: compressed });
+  }
+
+  console.info("[ZBFinance] Session sync to Firestore complete ✓");
+}
+
+// Start connecting immediately on module load
+initFirebase();
+
+export const isUsingFirebase = () => _fbReady;
+
+// ─── Firestore helpers ────────────────────────────────────────────────
 async function _fsGet(col, id) {
   const { doc, getDoc } = await import("firebase/firestore");
   const s = await getDoc(doc(_db, col, id));
   return s.exists() ? { id: s.id, ...s.data() } : null;
 }
 
+async function _fsSaveAwait(col, id, data) {
+  const { doc, setDoc, serverTimestamp } = await import("firebase/firestore");
+  await setDoc(doc(_db, col, id), { ...data, _syncedAt: serverTimestamp() });
+  _emitSync(col, "save");
+}
+
 function _fsSave(col, id, data) {
-  return import("firebase/firestore")
-    .then(({ doc, setDoc, serverTimestamp }) =>
-      setDoc(doc(_db, col, id), { ...data, _syncedAt: serverTimestamp() }),
-    )
-    .then(() => _emitSync(col, "save"))
-    .catch((e) =>
-      console.warn(`[ZBFinance] Sync failed (${col}/${id}):`, e.message),
-    );
+  if (!_fbReady) {
+    _pendingWrites.push({ col, id, data }); // queue for when Firebase connects
+    return;
+  }
+  _fsSaveAwait(col, id, data).catch((e) =>
+    console.warn(`[ZBFinance] Sync failed (${col}/${id}):`, e.message),
+  );
 }
 
 function _fsDel(col, id) {
-  return import("firebase/firestore")
+  if (!_fbReady) return;
+  import("firebase/firestore")
     .then(({ doc, deleteDoc }) => deleteDoc(doc(_db, col, id)))
     .then(() => _emitSync(col, "delete"))
     .catch((e) =>
@@ -133,15 +238,76 @@ function _emitSync(col, action) {
   );
 }
 
-// ─── THE KEY FIX: Smart hybrid load ───────────────────────────────────
-//
-//  Case A: localStorage HAS data  → return instantly, refresh Firestore in background
-//  Case B: localStorage is EMPTY  → await Firebase, fetch Firestore, cache locally
-//
+// ══════════════════════════════════════════════════════════════════════
+// IMAGE COMPRESSION  (canvas-based, no Firebase Storage needed)
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * Compress a base64/dataURL image using canvas.
+ * Exported — components can call it directly if needed.
+ *
+ * @param {string} dataUrl   data:image/... string (or null/https URL — passed through unchanged)
+ * @param {number} maxSize   max width OR height in px (aspect ratio preserved)
+ * @param {number} quality   JPEG quality 0–1
+ * @returns {Promise<string>}
+ */
+export function compressImage(dataUrl, maxSize = 200, quality = 0.75) {
+  if (!dataUrl || !dataUrl.startsWith("data:image"))
+    return Promise.resolve(dataUrl); // null, https:// URLs, etc — pass through
+
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(maxSize / img.width, maxSize / img.height, 1);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+      const out = canvas.toDataURL("image/jpeg", quality);
+      console.info(
+        `[ZBFinance] Compressed image: ${Math.round(
+          dataUrl.length / 1024,
+        )}KB → ${Math.round(out.length / 1024)}KB`,
+      );
+      resolve(out);
+    };
+    img.onerror = () => resolve(dataUrl); // fallback: use original if canvas fails
+    img.src = dataUrl;
+  });
+}
+
+/**
+ * Recursively walk an object/array and compress every base64 image field.
+ * Used automatically before saving channels, payment methods, etc.
+ */
+async function _compressAllImages(data, maxSize = 64, quality = 0.85) {
+  if (!data || typeof data !== "object") return data;
+
+  if (Array.isArray(data))
+    return Promise.all(
+      data.map((item) => _compressAllImages(item, maxSize, quality)),
+    );
+
+  const result = { ...data };
+  for (const key of Object.keys(result)) {
+    const val = result[key];
+    if (typeof val === "string" && val.startsWith("data:image")) {
+      result[key] = await compressImage(val, maxSize, quality);
+    } else if (val && typeof val === "object") {
+      result[key] = await _compressAllImages(val, maxSize, quality);
+    }
+  }
+  return result;
+}
+
+// ─── Smart hybrid load ────────────────────────────────────────────────
+// Case A: localStorage has data  → return instantly, refresh Firestore silently
+// Case B: localStorage empty     → await Firebase, pull Firestore, cache locally
 async function _hybridLoad(lsKey, fsCol) {
   const local = ls.get(lsKey);
 
-  // Case A: have local data — return immediately
   if (local && local.length > 0) {
     if (_fbReady) {
       _fsAll(fsCol)
@@ -153,7 +319,6 @@ async function _hybridLoad(lsKey, fsCol) {
     return local;
   }
 
-  // Case B: no local data — wait for Firebase then pull from Firestore
   await initFirebase();
   if (_fbReady) {
     try {
@@ -163,25 +328,44 @@ async function _hybridLoad(lsKey, fsCol) {
         return remote;
       }
     } catch (e) {
-      console.warn(
-        `[ZBFinance] Could not load ${fsCol} from Firestore:`,
-        e.message,
-      );
+      console.warn(`[ZBFinance] Could not load ${fsCol}:`, e.message);
     }
   }
-
   return [];
 }
 
-// ─── Hybrid write helpers ─────────────────────────────────────────────
-function _hybridSave(lsKey, fsCol, item) {
+// Compress any embedded images then save to both localStorage + Firestore
+async function _hybridSaveCompressed(
+  lsKey,
+  fsCol,
+  item,
+  maxSize = 64,
+  quality = 0.85,
+) {
+  // 1. localStorage — always instant with original data (UI sees full quality)
   const all = ls.get(lsKey) || [];
   const idx = all.findIndex((x) => x.id === item.id);
   ls.set(
     lsKey,
     idx >= 0 ? all.map((x) => (x.id === item.id ? item : x)) : [item, ...all],
   );
-  if (_fbReady) _fsSave(fsCol, item.id, item);
+
+  // 2. Compress images, then push to Firestore
+  const compressed = await _compressAllImages(item, maxSize, quality);
+  _fsSave(fsCol, compressed.id, compressed);
+
+  return item;
+}
+
+function _hybridSave(lsKey, fsCol, item) {
+  // Standard save — no image compression (for data-only collections)
+  const all = ls.get(lsKey) || [];
+  const idx = all.findIndex((x) => x.id === item.id);
+  ls.set(
+    lsKey,
+    idx >= 0 ? all.map((x) => (x.id === item.id ? item : x)) : [item, ...all],
+  );
+  _fsSave(fsCol, item.id, item);
   return item;
 }
 
@@ -190,7 +374,7 @@ function _hybridDelete(lsKey, fsCol, id) {
     lsKey,
     (ls.get(lsKey) || []).filter((x) => x.id !== id),
   );
-  if (_fbReady) _fsDel(fsCol, id);
+  _fsDel(fsCol, id);
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -226,11 +410,10 @@ export async function loadCurrencies(defaults) {
 }
 export async function saveCurrencies(list) {
   ls.set(_K.currencies, list);
-  if (_fbReady)
-    _fsSave("config", "currencies", {
-      list,
-      updatedAt: new Date().toISOString(),
-    });
+  _fsSave("config", "currencies", {
+    list,
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -278,31 +461,112 @@ export async function loadActivity() {
 export async function logActivity(entry) {
   const all = ls.get(_K.activity) || [];
   ls.set(_K.activity, [entry, ...all].slice(0, 500));
-  if (_fbReady) _fsSave("activity", entry.id, entry);
+  _fsSave("activity", entry.id, entry);
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// SETTLED BASELINE  (local only — derived data)
+// SETTLED BASELINE
+// Critical state — must sync across all browsers.
 // ══════════════════════════════════════════════════════════════════════
 export async function loadSettledBaseline() {
-  return ls.get(_K.settledBaseline) || null;
+  // localStorage first — instant
+  const local = ls.get(_K.settledBaseline);
+  if (local !== null && local !== undefined) return local;
+
+  // New browser — fetch from Firestore
+  await initFirebase();
+  if (_fbReady) {
+    try {
+      const rec = await _fsGet("config", "settledBaseline");
+      if (rec?.data !== undefined) {
+        ls.set(_K.settledBaseline, rec.data);
+        console.info("[ZBFinance] Settled baseline loaded from Firestore ✓");
+        return rec.data;
+      }
+    } catch (e) {
+      console.warn("[ZBFinance] Failed to load settled baseline:", e.message);
+    }
+  }
+  return null;
 }
+
 export async function saveSettledBaseline(b) {
   ls.set(_K.settledBaseline, b);
+  _fsSave("config", "settledBaseline", {
+    data: b,
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// CEO IMAGES  (local only — base64 blobs exceed Firestore 1MB limit)
+// CEO IMAGES
+// Raw base64 from FileReader → compressed to 200×200px → stored in Firestore
+// No Firebase Storage needed (free Spark plan compatible ✓)
 // ══════════════════════════════════════════════════════════════════════
 export async function loadCEOImages() {
-  return ls.get(_K.ceoImages) || { sumaiya: null, rakib: null };
+  // localStorage cache — instant on returning visits
+  const cached = ls.get(_K.ceoImages);
+  if (cached?.sumaiya || cached?.rakib) return cached;
+
+  // New browser — fetch from Firestore (stored as two separate docs to avoid 1MB limit)
+  await initFirebase();
+  if (_fbReady) {
+    try {
+      const [recS, recR] = await Promise.all([
+        _fsGet("config", "ceoImage_sumaiya"),
+        _fsGet("config", "ceoImage_rakib"),
+      ]);
+      const imgs = {
+        sumaiya: recS?.data || null,
+        rakib: recR?.data || null,
+      };
+      if (imgs.sumaiya || imgs.rakib) {
+        ls.set(_K.ceoImages, imgs);
+        console.info("[ZBFinance] CEO images loaded from Firestore ✓");
+      }
+      return imgs;
+    } catch (e) {
+      console.warn("[ZBFinance] Failed to load CEO images:", e.message);
+    }
+  }
+  return { sumaiya: null, rakib: null };
 }
+
 export async function saveCEOImages(imgs) {
-  ls.set(_K.ceoImages, imgs);
+  // Compress each photo separately — keeps each doc well under Firestore 1MB limit
+  const compressed = {
+    sumaiya: await compressImage(imgs.sumaiya, 200, 0.72),
+    rakib: await compressImage(imgs.rakib, 200, 0.72),
+  };
+
+  // 1. localStorage — instant, always works
+  ls.set(_K.ceoImages, compressed);
+
+  // 2. Firestore — one doc per CEO (same fire-and-forget pattern as saveChannels)
+  // Storing each image in its own document avoids any combined size issues
+  await initFirebase();
+  if (_fbReady) {
+    if (compressed.sumaiya !== undefined) {
+      _fsSave("config", "ceoImage_sumaiya", {
+        data: compressed.sumaiya,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    if (compressed.rakib !== undefined) {
+      _fsSave("config", "ceoImage_rakib", {
+        data: compressed.rakib,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    console.info("[ZBFinance] CEO images queued for Firestore sync ✓");
+  }
+
+  return compressed;
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// PAYMENT CHANNELS  (synced)
+// PAYMENT CHANNELS
+// iconBase64 fields auto-compressed to 64×64px before Firestore
 // ══════════════════════════════════════════════════════════════════════
 export async function loadChannels() {
   const local = ls.get(_K.channels);
@@ -317,19 +581,23 @@ export async function loadChannels() {
       }
     } catch {}
   }
-  return null;
+  return null; // null = component uses DEF_CHANNELS
 }
+
 export async function saveChannels(list) {
+  // Save raw to localStorage immediately (UI sees full-res icons instantly)
   ls.set(_K.channels, list);
-  if (_fbReady)
-    _fsSave("config", "channels", {
-      list,
-      updatedAt: new Date().toISOString(),
-    });
+  // Compress icons before pushing to Firestore
+  const compressed = await _compressAllImages(list, 64, 0.85);
+  _fsSave("config", "channels", {
+    list: compressed,
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// PAYMENT METHODS  (synced)
+// PAYMENT METHODS
+// iconBase64 fields auto-compressed to 64×64px before Firestore
 // ══════════════════════════════════════════════════════════════════════
 export async function loadPaymentMethods() {
   const local = ls.get(_K.paymentMethods);
@@ -346,13 +614,16 @@ export async function loadPaymentMethods() {
   }
   return [];
 }
+
 export async function savePaymentMethods(list) {
+  // Save raw to localStorage immediately
   ls.set(_K.paymentMethods, list);
-  if (_fbReady)
-    _fsSave("config", "paymentMethods", {
-      list,
-      updatedAt: new Date().toISOString(),
-    });
+  // Compress icons before pushing to Firestore
+  const compressed = await _compressAllImages(list, 64, 0.85);
+  _fsSave("config", "paymentMethods", {
+    list: compressed,
+    updatedAt: new Date().toISOString(),
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -368,38 +639,48 @@ export async function hashPassword(raw) {
 }
 
 export async function getStoredHash() {
-  // 1. localStorage cache — instant on returning visits
-  const local = localStorage.getItem(_K.authHash);
-  if (local) return local;
+  // Fast path — cached in localStorage (instant on returning visits)
+  const cached = localStorage.getItem(_K.authHash);
+  if (cached) return cached;
 
-  // 2. New browser/device — pull from Firestore (source of truth)
+  // Slow path — new browser, fetch master hash from Firestore
+  console.info("[ZBFinance] No local hash, checking Firestore...");
   await initFirebase();
   if (_fbReady) {
     try {
       const rec = await _fsGet("config", "auth");
       if (rec?.passwordHash) {
         localStorage.setItem(_K.authHash, rec.passwordHash);
+        console.info("[ZBFinance] Master hash loaded from Firestore ✓");
         return rec.passwordHash;
       }
-    } catch {}
+    } catch (e) {
+      console.warn("[ZBFinance] Failed to fetch master hash:", e.message);
+    }
   }
-  return null; // no password set anywhere yet
+  return null; // no password set anywhere → first-time setup
 }
 
 export async function setStoredHash(h) {
+  // Save locally first
   localStorage.setItem(_K.authHash, h);
-  // Awaited — ensures Firestore write completes before user enters app
+  // Await Firestore write so all devices get the password immediately
   await initFirebase();
   if (_fbReady) {
-    await _fsSave("config", "auth", {
-      passwordHash: h,
-      setAt: new Date().toISOString(),
-    });
+    try {
+      await _fsSaveAwait("config", "auth", {
+        passwordHash: h,
+        setAt: new Date().toISOString(),
+      });
+      console.info("[ZBFinance] Master password saved to Firestore ✓");
+    } catch (e) {
+      console.error("[ZBFinance] FAILED to save master hash:", e.message);
+    }
   }
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// SESSION  (always local — resets on tab close by design)
+// SESSION  (local only — resets on tab close by design)
 // ══════════════════════════════════════════════════════════════════════
 export function getSession() {
   return sessionStorage.getItem(_K.session);
@@ -412,7 +693,7 @@ export function clearSession() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// THEME  (always local — per-device preference)
+// THEME  (local only — per-device preference)
 // ══════════════════════════════════════════════════════════════════════
 export function loadTheme() {
   return localStorage.getItem(_K.theme) || "dark";
