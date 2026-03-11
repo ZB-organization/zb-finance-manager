@@ -20,7 +20,6 @@ import {
   EXPENSE_CATS,
   EXPENSE_PAID_BY,
   COMPANY,
-  DEF_CURRENCIES,
   GEN_ID,
   FMT,
   FMT2,
@@ -54,8 +53,6 @@ const BLANK = {
 ══════════════════════════ */
 function ExpenseForm({ initial, currencies, onSave, onCancel }) {
   const pal = usePalette();
-  const curr_list =
-    currencies && currencies.length > 0 ? currencies : DEF_CURRENCIES;
   const [form, setForm] = useState(initial ? { ...initial } : { ...BLANK });
   const set = useCallback((k, v) => setForm((f) => ({ ...f, [k]: v })), []);
 
@@ -81,40 +78,35 @@ function ExpenseForm({ initial, currencies, onSave, onCancel }) {
       return;
     }
 
-    const curr = curr_list.find((c) => c.code === form.currency) || { rate: 1 };
     let totalAmount = parseFloat(form.amount) || 0;
-    let amountSumaiya = 0,
-      amountRakib = 0;
 
-    // For Joint: individual amounts drive the total — always derive to stay consistent
+    // For Joint: if individual amounts filled, sum them as the total
     if (form.paidBy === "Company (Joint)") {
-      amountSumaiya = parseFloat(form.amountSumaiya) || 0;
-      amountRakib = parseFloat(form.amountRakib) || 0;
-      if (amountSumaiya > 0 || amountRakib > 0) {
-        // Individual amounts are the source of truth; total must equal their sum
-        totalAmount = amountSumaiya + amountRakib;
-      }
+      const sAmt = parseFloat(form.amountSumaiya) || 0;
+      const rAmt = parseFloat(form.amountRakib) || 0;
+      if (sAmt > 0 || rAmt > 0) totalAmount = sAmt + rAmt;
     }
 
     if (!totalAmount) {
       alert("Amount must be > 0");
       return;
     }
-
+    const curr = (currencies || []).find((c) => c.code === form.currency) || {
+      rate: 1,
+    };
     onSave({
       ...form,
       id: form.id || GEN_ID(),
       amount: totalAmount,
       amountBDT: totalAmount * curr.rate,
-      // Raw-currency individual amounts (kept for display)
-      amountSumaiya: form.paidBy === "Company (Joint)" ? amountSumaiya : 0,
-      amountRakib: form.paidBy === "Company (Joint)" ? amountRakib : 0,
-      // BDT-converted individual amounts — used by calcDebt() for accurate settlement
-      amountSumaiyaBDT:
-        form.paidBy === "Company (Joint)" ? amountSumaiya * curr.rate : 0,
-      amountRakibBDT:
-        form.paidBy === "Company (Joint)" ? amountRakib * curr.rate : 0,
-      currency: form.currency,
+      amountSumaiya:
+        form.paidBy === "Company (Joint)"
+          ? parseFloat(form.amountSumaiya) || 0
+          : 0,
+      amountRakib:
+        form.paidBy === "Company (Joint)"
+          ? parseFloat(form.amountRakib) || 0
+          : 0,
       createdAt: form.createdAt || TS(),
       updatedAt: TS(),
     });
@@ -223,9 +215,9 @@ function ExpenseForm({ initial, currencies, onSave, onCancel }) {
             value={form.currency}
             onChange={(e) => set("currency", e.target.value)}
           >
-            {curr_list.map((c) => (
+            {(currencies || []).map((c) => (
               <option key={c.code} value={c.code}>
-                {c.symbol} {c.code}
+                {c.code}
               </option>
             ))}
           </select>
@@ -332,7 +324,8 @@ function ExpenseForm({ initial, currencies, onSave, onCancel }) {
               }}
             >
               Total ={" "}
-              {curr_list.find((c) => c.code === form.currency)?.symbol || "৳"}
+              {(currencies || []).find((c) => c.code === form.currency)
+                ?.symbol || "৳"}
               {FMT2(
                 (parseFloat(form.amountSumaiya) || 0) +
                   (parseFloat(form.amountRakib) || 0),
@@ -457,10 +450,8 @@ function ExpenseForm({ initial, currencies, onSave, onCancel }) {
 /* ══════════════════════════
    MAIN PAGE
 ══════════════════════════ */
-export default function Expenses({ currencies, onLog }) {
+export default function Expenses({ currencies, onLog, onSaved }) {
   const pal = usePalette();
-  const curr_list =
-    currencies && currencies.length > 0 ? currencies : DEF_CURRENCIES;
   const [expenses, setExpenses] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -515,6 +506,7 @@ export default function Expenses({ currencies, onLog }) {
     setExpenses(await loadExpenses());
     setShowForm(false);
     setEditing(null);
+    onSaved && onSaved(); // ← tells App.jsx to reload expenses → recalculates appDebt → red dot updates
     onLog &&
       onLog({
         type: "EXPENSE_SAVED",
@@ -526,6 +518,7 @@ export default function Expenses({ currencies, onLog }) {
     if (!window.confirm("Delete this expense?")) return;
     await deleteExpense(id);
     setExpenses(await loadExpenses());
+    onSaved && onSaved(); // ← same: sync App state on delete
     onLog && onLog({ type: "EXPENSE_DELETED", detail: "Expense deleted" });
   };
 
@@ -672,7 +665,7 @@ export default function Expenses({ currencies, onLog }) {
       {(showForm || editing) && (
         <ExpenseForm
           initial={editing}
-          currencies={curr_list}
+          currencies={currencies}
           onSave={handleSave}
           onCancel={() => {
             setShowForm(false);
@@ -924,7 +917,8 @@ export default function Expenses({ currencies, onLog }) {
         filtered.map((e) => {
           const pColor = PAYER_COLOR[e.paidBy] || "#64748b";
           const currSym =
-            curr_list.find((c) => c.code === e.currency)?.symbol || "৳";
+            (currencies || []).find((c) => c.code === e.currency)?.symbol ||
+            "৳";
           return (
             <Card
               key={e.id}

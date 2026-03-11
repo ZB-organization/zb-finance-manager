@@ -221,6 +221,22 @@ export const COMPANY = {
 /* ── Changelog ─────────────────────────────────────────────── */
 export const CHANGELOG = [
   {
+    v: "1.6.0",
+    date: "2026-03-11",
+    changes: [
+      "Reports page — monthly & yearly calculations table for all projects and expenses",
+      "Period navigator: prev/next arrows + quick month/year dropdowns",
+      "Projects table: date, budget, BDT, tax, net, Sumaiya share, Rakib share, channel, rule, status",
+      "Expenses table: date, description, category, paid by, currency, amount, BDT, settlement flag",
+      "Overview KPI cards: Project Revenue, Net after tax, CEO earnings, Total Expenses, Net P&L",
+      "Search bar filters both tables simultaneously across all text fields",
+      "Filter panel: paid-by (expenses), category (expenses), status (projects)",
+      "Export to CSV: projects + expenses as two sections in one file, named by period",
+      "Invoice Gen: branded layout with logo upload, accent color picker, live preview, browser print",
+      "Invoice Gen: Bengali and all Unicode languages now fully supported (no jsPDF cutoff)",
+    ],
+  },
+  {
     v: "1.5.0",
     date: "2026-03-10",
     changes: [
