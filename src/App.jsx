@@ -50,7 +50,6 @@ import { ThemeProvider, useTheme, usePalette } from "./theme";
 import {
   loadProjects,
   saveProject,
-  
   deleteProject,
   loadCurrencies,
   saveCurrencies,
@@ -110,6 +109,7 @@ import {
   MiniStat,
 } from "./components/ProgressBar";
 import AuthPage from "./auth";
+import BackupRestore from "./components/BackupRestore";
 
 /* ════════════════════════════════════════════════════════════
    TOAST NOTIFICATION SYSTEM
@@ -3441,6 +3441,7 @@ function SettingsPage({
 
   return (
     <div style={{ paddingBottom: 48 }}>
+      <BackupRestore onLog={onLog} />
       <h2
         style={{
           fontSize: 22,
@@ -4703,16 +4704,17 @@ function AppInner({ onLogout }) {
       loadSettledBaseline(),
       loadCEOImages(),
       loadPaymentMethods(),
-      loadSettlements(), // ← add this
+      loadSettlements(),
       loadChannels(),
     ])
-      .then(([p, c, e, sb, ci, pm, ch]) => {
+      .then(([p, c, e, sb, ci, pm, settlements, ch]) => {
         setProjects(p);
         setCurrencies(c);
         setExpenses(e);
         setSettledBaseline(sb);
         setCeoImages(ci || { sumaiya: null, rakib: null });
         setPaymentMethods(pm || []);
+        // settlements loaded by Settlement component itself via useEffect
         setChannels(ch || DEF_CHANNELS);
         setLoading(false);
         notify({
@@ -5490,12 +5492,76 @@ export default function App() {
     <ThemeProvider>
       <ToastProvider>
         <style>{`
+          /* ── Progress bars ── */
+          @keyframes pb-shimmer {
+            0%   { background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.18) 50%, transparent 100%); background-size: 200% 100%; background-position: -100% 0; }
+            100% { background-position: 200% 0; }
+          }
+          .pb-shimmer {
+            animation: pb-shimmer 1.6s ease-in-out infinite;
+          }
+          @keyframes pb-fill-in {
+            from { width: 0%; }
+          }
+          .pb-fill {
+            animation: pb-fill-in 0.9s cubic-bezier(0.34,1.56,0.64,1) both;
+          }
+          .pb-striped {
+            animation: pb-fill-in 0.9s cubic-bezier(0.34,1.56,0.64,1) both;
+            background-size: 24px 24px !important;
+            animation: pb-fill-in 0.9s cubic-bezier(0.34,1.56,0.64,1) both, pb-stripe 0.6s linear infinite;
+          }
+          @keyframes pb-stripe {
+            from { background-position: 0 0; }
+            to   { background-position: 24px 0; }
+          }
+
+          /* ── Cards ── */
+          @keyframes card-float-in {
+            from { opacity: 0; transform: translateY(14px); }
+            to   { opacity: 1; transform: translateY(0); }
+          }
+          .card-animated {
+            animation: card-float-in 0.35s ease both;
+          }
+
+          /* ── Background blobs ── */
+          @keyframes blobFloat {
+            0%, 100% { transform: translate(0,0) scale(1); }
+            33%       { transform: translate(40px,-30px) scale(1.06); }
+            66%       { transform: translate(-25px,20px) scale(0.95); }
+          }
+
+          /* ── Auth page float ── */
+          @keyframes float {
+            0%, 100% { transform: translateY(0); }
+            50%       { transform: translateY(-10px); }
+          }
+
+          /* ── Glow pulse (sidebar logo etc) ── */
+          @keyframes glow {
+            0%, 100% { opacity: 1; filter: drop-shadow(0 0 6px currentColor); }
+            50%       { opacity: 0.7; filter: drop-shadow(0 0 18px currentColor); }
+          }
+
+          /* ── Number pulse (CEO earned amount) ── */
+          @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50%       { opacity: 0.65; }
+          }
+
+          /* ── Utility ── */
           @keyframes spin { to { transform: rotate(360deg); } }
           @keyframes toastProgress { from { width: 100%; } to { width: 0%; } }
+
+          /* ── Scrollbar ── */
+          ::-webkit-scrollbar { width: 6px; height: 6px; }
+          ::-webkit-scrollbar-track { background: transparent; }
+          ::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.2); border-radius: 3px; }
+          ::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,0.4); }
         `}</style>
         <AppRoot />
       </ToastProvider>
     </ThemeProvider>
   );
 }
-

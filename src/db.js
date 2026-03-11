@@ -701,3 +701,259 @@ export function loadTheme() {
 export function saveTheme(t) {
   localStorage.setItem(_K.theme, t);
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// BACKUP & RESTORE
+// Export: collects everything from localStorage + Firestore into one
+//         JSON file and triggers a browser download.
+// Import: reads the JSON file, restores every collection to localStorage
+//         AND pushes everything up to Firestore in one pass.
+// ══════════════════════════════════════════════════════════════════════
+
+/**
+ * Collect every collection from Firestore (source of truth) and
+ * package into a single downloadable JSON backup file.
+ *
+ * Falls back to localStorage if Firestore is unavailable.
+ *
+ * @returns {Promise<void>}  triggers browser file download
+ */
+export async function exportBackup() {
+  await initFirebase();
+
+  // ── Pull every collection ──────────────────────────────────────────
+  let projects = [],
+    payments = [],
+    expenses = [],
+    settlements = [],
+    activity = [];
+  let currencies = null,
+    channels = null,
+    paymentMethods = null,
+    settledBaseline = null,
+    ceoImages = null;
+
+  if (_fbReady) {
+    try {
+      [projects, payments, expenses, settlements, activity] = await Promise.all(
+        [
+          _fsAll("projects"),
+          _fsAll("payments"),
+          _fsAll("expenses"),
+          _fsAll("settlements"),
+          _fsAll("activity"),
+        ],
+      );
+
+      const [cur, ch, pm, sb, imgS, imgR] = await Promise.all([
+        _fsGet("config", "currencies"),
+        _fsGet("config", "channels"),
+        _fsGet("config", "paymentMethods"),
+        _fsGet("config", "settledBaseline"),
+        _fsGet("config", "ceoImage_sumaiya"),
+        _fsGet("config", "ceoImage_rakib"),
+      ]);
+
+      currencies = cur?.list ?? ls.get(_K.currencies);
+      channels = ch?.list ?? ls.get(_K.channels);
+      paymentMethods = pm?.list ?? ls.get(_K.paymentMethods);
+      settledBaseline = sb?.data ?? ls.get(_K.settledBaseline);
+      ceoImages = {
+        sumaiya: imgS?.data ?? null,
+        rakib: imgR?.data ?? null,
+      };
+    } catch (e) {
+      console.warn(
+        "[ZBFinance] Firestore read during export failed, using localStorage:",
+        e.message,
+      );
+    }
+  }
+
+  // Fallback: use localStorage for anything still null
+  if (!projects.length) projects = ls.get(_K.projects) || [];
+  if (!payments.length) payments = ls.get(_K.payments) || [];
+  if (!expenses.length) expenses = ls.get(_K.expenses) || [];
+  if (!settlements.length) settlements = ls.get(_K.settlements) || [];
+  if (!activity.length) activity = ls.get(_K.activity) || [];
+  if (!currencies) currencies = ls.get(_K.currencies) || [];
+  if (!channels) channels = ls.get(_K.channels) || [];
+  if (!paymentMethods) paymentMethods = ls.get(_K.paymentMethods) || [];
+  if (settledBaseline === null) settledBaseline = ls.get(_K.settledBaseline);
+  if (!ceoImages)
+    ceoImages = ls.get(_K.ceoImages) || { sumaiya: null, rakib: null };
+
+  // ── Build backup object ────────────────────────────────────────────
+  const backup = {
+    _meta: {
+      version: "1.0",
+      app: "ZBFinanceManager",
+      exportedAt: new Date().toISOString(),
+      counts: {
+        projects: projects.length,
+        payments: payments.length,
+        expenses: expenses.length,
+        settlements: settlements.length,
+        activity: activity.length,
+      },
+    },
+    projects,
+    payments,
+    expenses,
+    settlements,
+    activity,
+    config: {
+      currencies,
+      channels,
+      paymentMethods,
+      settledBaseline,
+      ceoImages,
+    },
+  };
+
+  // ── Trigger download ───────────────────────────────────────────────
+  const date = new Date().toISOString().slice(0, 10);
+  const filename = `zbfm-backup-${date}.json`;
+  const blob = new Blob([JSON.stringify(backup, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  console.info(
+    `[ZBFinance] Backup downloaded: ${filename} (${Math.round(
+      blob.size / 1024,
+    )}KB)`,
+  );
+  return backup._meta;
+}
+
+/**
+ * Restore from a backup JSON file.
+ * Writes everything to localStorage immediately, then pushes to Firestore.
+ *
+ * @param {File} file  — File object from <input type="file">
+ * @param {{ onProgress?: (msg: string) => void }} opts
+ * @returns {Promise<{ counts: object }>}
+ */
+export async function importBackup(file, { onProgress = () => {} } = {}) {
+  // ── Parse file ─────────────────────────────────────────────────────
+  const text = await file.text();
+  let backup;
+  try {
+    backup = JSON.parse(text);
+  } catch {
+    throw new Error("Invalid backup file — could not parse JSON.");
+  }
+
+  if (backup._meta?.app !== "ZBFinanceManager") {
+    throw new Error("This file is not a ZBFinanceManager backup.");
+  }
+
+  const {
+    projects = [],
+    payments = [],
+    expenses = [],
+    settlements = [],
+    activity = [],
+    config = {},
+  } = backup;
+
+  const { currencies, channels, paymentMethods, settledBaseline, ceoImages } =
+    config;
+
+  // ── 1. Restore to localStorage immediately ─────────────────────────
+  onProgress("Restoring to local storage…");
+  if (projects.length) ls.set(_K.projects, projects);
+  if (payments.length) ls.set(_K.payments, payments);
+  if (expenses.length) ls.set(_K.expenses, expenses);
+  if (settlements.length) ls.set(_K.settlements, settlements);
+  if (activity.length) ls.set(_K.activity, activity);
+  if (currencies) ls.set(_K.currencies, currencies);
+  if (channels) ls.set(_K.channels, channels);
+  if (paymentMethods) ls.set(_K.paymentMethods, paymentMethods);
+  if (settledBaseline !== undefined && settledBaseline !== null)
+    ls.set(_K.settledBaseline, settledBaseline);
+  if (ceoImages) ls.set(_K.ceoImages, ceoImages);
+
+  // ── 2. Push to Firestore ───────────────────────────────────────────
+  onProgress("Connecting to Firestore…");
+  await initFirebase();
+
+  if (_fbReady) {
+    onProgress(`Uploading ${projects.length} projects…`);
+    for (const item of projects) {
+      await _fsSaveAwait("projects", item.id, item).catch(() => {});
+    }
+
+    onProgress(`Uploading ${payments.length} payments…`);
+    for (const item of payments) {
+      await _fsSaveAwait("payments", item.id, item).catch(() => {});
+    }
+
+    onProgress(`Uploading ${expenses.length} expenses…`);
+    for (const item of expenses) {
+      await _fsSaveAwait("expenses", item.id, item).catch(() => {});
+    }
+
+    onProgress(`Uploading ${settlements.length} settlements…`);
+    for (const item of settlements) {
+      await _fsSaveAwait("settlements", item.id, item).catch(() => {});
+    }
+
+    onProgress(`Uploading ${activity.length} activity logs…`);
+    for (const item of activity) {
+      await _fsSaveAwait("activity", item.id, item).catch(() => {});
+    }
+
+    onProgress("Uploading config…");
+    if (currencies)
+      await _fsSaveAwait("config", "currencies", { list: currencies }).catch(
+        () => {},
+      );
+    if (channels)
+      await _fsSaveAwait("config", "channels", { list: channels }).catch(
+        () => {},
+      );
+    if (paymentMethods)
+      await _fsSaveAwait("config", "paymentMethods", {
+        list: paymentMethods,
+      }).catch(() => {});
+    if (settledBaseline !== undefined && settledBaseline !== null) {
+      await _fsSaveAwait("config", "settledBaseline", {
+        data: settledBaseline,
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {});
+    }
+    if (ceoImages?.sumaiya) {
+      await _fsSaveAwait("config", "ceoImage_sumaiya", {
+        data: ceoImages.sumaiya,
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {});
+    }
+    if (ceoImages?.rakib) {
+      await _fsSaveAwait("config", "ceoImage_rakib", {
+        data: ceoImages.rakib,
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {});
+    }
+
+    onProgress("Firestore sync complete ✓");
+    console.info(
+      "[ZBFinance] Import complete — all data restored to Firestore ✓",
+    );
+  } else {
+    onProgress("Firestore unavailable — restored to local storage only");
+    console.warn(
+      "[ZBFinance] Import: Firestore not ready, restored locally only",
+    );
+  }
+
+  return { counts: backup._meta?.counts };
+}
