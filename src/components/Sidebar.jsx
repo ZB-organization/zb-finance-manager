@@ -21,6 +21,8 @@ import {
   Cloud,
   X,
   BarChart2,
+  Users,
+  Briefcase,
 } from "lucide-react";
 import { usePalette, useTheme } from "../theme";
 import { clearSession } from "../db";
@@ -28,7 +30,7 @@ import { clearSession } from "../db";
 /* NAV is exported so AppInner can derive appDebt badge from it */
 export function buildNav(appDebt) {
   return [
-    { id: "dashboard", label: "Dashboard", Icon: LayoutDashboard },
+    { id: "dashboard",  label: "Dashboard",   Icon: LayoutDashboard },
     {
       id: "settlement",
       label: "Settlement",
@@ -36,7 +38,7 @@ export function buildNav(appDebt) {
       accent: "#10b981",
       needsSettle: appDebt > 0.01,
     },
-    { id: "projects", label: "Projects", Icon: FolderOpen },
+    { id: "projects",   label: "Projects",    Icon: FolderOpen },
     {
       id: "sumaiya",
       label: "Sumaiya",
@@ -44,16 +46,17 @@ export function buildNav(appDebt) {
       color: "#ec4899",
       tag: "CEO1",
     },
-    { id: "rakib", label: "Rakib", Icon: User, color: "#3b82f6", tag: "CEO2" },
-    { id: "divider1", label: "─────────────", Icon: null, divider: true },
-    { id: "payments", label: "Payments", Icon: CreditCard, accent: "#8b5cf6" },
-    { id: "expenses", label: "Expenses", Icon: Receipt, accent: "#f59e0b" },
-    { id: "invoice", label: "Invoice Gen", Icon: FileText, accent: "#06b6d4" },
-    { id: "divider2", label: "─────────────", Icon: null, divider: true },
-    // In the nav items array:
-    { id: "reports", label: "Reports", Icon: BarChart2 },
-    { id: "activity", label: "Activity", Icon: Activity },
-    { id: "settings", label: "Settings", Icon: Settings },
+    { id: "rakib",      label: "Rakib",       Icon: User, color: "#3b82f6", tag: "CEO2" },
+    { id: "divider1",   label: "─────────────", Icon: null, divider: true },
+    { id: "payments",   label: "Payments",    Icon: CreditCard, accent: "#8b5cf6" },
+    { id: "expenses",   label: "Expenses",    Icon: Receipt,    accent: "#f59e0b" },
+    { id: "invoice",    label: "Invoice Gen", Icon: FileText,   accent: "#06b6d4" },
+    { id: "clients",    label: "Clients",     Icon: Users,      accent: "#a855f7" },
+    { id: "employees",  label: "Employees",   Icon: Briefcase,  accent: "#f97316" },
+    { id: "divider2",   label: "─────────────", Icon: null, divider: true },
+    { id: "reports",    label: "Reports",     Icon: BarChart2 },
+    { id: "activity",   label: "Activity",    Icon: Activity },
+    { id: "settings",   label: "Settings",    Icon: Settings },
   ];
 }
 
@@ -135,7 +138,7 @@ export default function Sidebar({
                 textTransform: "uppercase",
               }}
             >
-              Manager v1.5
+              Manager v2.0
             </div>
           </div>
         </div>
@@ -149,6 +152,7 @@ export default function Sidebar({
           display: "flex",
           flexDirection: "column",
           gap: 2,
+          overflowY: "auto",
         }}
       >
         {nav.map(

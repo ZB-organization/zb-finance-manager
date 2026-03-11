@@ -5,8 +5,9 @@ import { usePalette } from "../theme";
 import { calcShares } from "../calc";
 import { FMT, FMT2 } from "../constants";
 import { FormSec, FormGrid, FormField } from "./Shared";
+import EntityPicker from "./EntityPicker";
 
-/* ── CalcBreakdown (defined OUTSIDE modal — never recreated) ── */
+/* ── CalcBreakdown ────────────────────────────────────────── */
 function CalcBreakdown({ project, currencies }) {
   const pal = usePalette();
   const c = calcShares(project, currencies);
@@ -39,7 +40,7 @@ function CalcBreakdown({ project, currencies }) {
   );
 }
 
-/* ── PaymentEntry row (defined OUTSIDE modal) ── */
+/* ── PaymentEntry row ─────────────────────────────────────── */
 function PaymentRow({ entry, idx, currencies, onUpdate, onRemove, inp, pal }) {
   const [proofInput, setProofInput] = useState("");
   const set = useCallback((k, v) => onUpdate(idx, { ...entry, [k]: v }), [onUpdate, idx, entry]);
@@ -53,7 +54,6 @@ function PaymentRow({ entry, idx, currencies, onUpdate, onRemove, inp, pal }) {
 
   return (
     <div style={{ background:`${stColor}08`, border:`1px solid ${stColor}22`, borderRadius:14, padding:16, marginBottom:12, position:"relative" }}>
-      {/* Status strip */}
       <div style={{ position:"absolute", left:0, top:0, bottom:0, width:3, borderRadius:"14px 0 0 14px", background:stColor }} />
 
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:10 }}>
@@ -89,7 +89,6 @@ function PaymentRow({ entry, idx, currencies, onUpdate, onRemove, inp, pal }) {
         </FormField>
       </div>
 
-      {/* Mini progress bar */}
       {parseFloat(entry.totalOwed) > 0 && (
         <div style={{ marginBottom:10 }}>
           {(() => {
@@ -117,7 +116,6 @@ function PaymentRow({ entry, idx, currencies, onUpdate, onRemove, inp, pal }) {
         <input style={inp} value={entry.notes} onChange={e=>set("notes",e.target.value)} placeholder="Optional context…"/>
       </FormField>
 
-      {/* Proof links */}
       <div style={{ marginTop:10 }}>
         <div style={{ display:"flex", gap:8, marginBottom:6 }}>
           <input style={{...inp, flex:1}} value={proofInput} onChange={e=>setProofInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addProof()} placeholder="Add proof link (screenshot, invoice URL)…"/>
@@ -133,7 +131,6 @@ function PaymentRow({ entry, idx, currencies, onUpdate, onRemove, inp, pal }) {
         ))}
       </div>
 
-      {/* Remove entry */}
       <button onClick={()=>onRemove(idx)} style={{ position:"absolute", top:12, right:12, background:"rgba(239,68,68,0.08)", border:"1px solid rgba(239,68,68,0.2)", borderRadius:8, padding:"4px 8px", color:"#ef4444", cursor:"pointer", fontSize:11, fontWeight:600, fontFamily:"inherit" }}>Remove</button>
     </div>
   );
@@ -142,7 +139,8 @@ function PaymentRow({ entry, idx, currencies, onUpdate, onRemove, inp, pal }) {
 /* ── Blank template ─────────────────────────────────────── */
 const BLANK = {
   name:"", url:"", docUrl:"",
-  workerType:"ceo_rakib", workerName:"",
+  clientId:"", clientName:"",
+  workerType:"ceo_rakib", workerName:"", workerId:"",
   startDate:"", endDate:"", payDay:"",
   paymentChannel:CHANNELS.sumaiya[0],
   paymentReceiver:"sumaiya",
@@ -153,7 +151,6 @@ const BLANK = {
   paymentEntries: [],
 };
 
-/* ── Static worker options - defined OUTSIDE so they never get recreated ── */
 const WORKER_OPTS = [
   { v:"ceo_sumaiya", l:"Sumaiya", color:"#ec4899" },
   { v:"ceo_rakib",   l:"Rakib",   color:"#3b82f6" },
@@ -172,16 +169,13 @@ const RATE_OPTS = [
 ];
 
 /* ── Modal ──────────────────────────────────────────────── */
-export default function ProjectModal({ project, currencies, onSave, onClose }) {
+export default function ProjectModal({ project, currencies, clients = [], employees = [], onSave, onClose }) {
   const pal    = usePalette();
   const isEdit = !!project?.id;
   const [form, setForm] = useState(() => project ? { ...BLANK, ...project } : { ...BLANK });
   const [inv,  setInv]  = useState("");
-  const [showPaySec, setShowPaySec] = useState(
-    () => !!(project?.paymentEntries?.length)
-  );
+  const [showPaySec, setShowPaySec] = useState(() => !!(project?.paymentEntries?.length));
 
-  // Memoize inp so it only changes when palette changes, not on every keystroke
   const inp = useMemo(() => ({
     width:"100%", boxSizing:"border-box",
     background:pal.inpBg, border:`1px solid ${pal.inpBorder}`,
@@ -200,15 +194,6 @@ export default function ProjectModal({ project, currencies, onSave, onClose }) {
   }, []);
   const remInv = useCallback(i => setForm(f => ({ ...f, invoices: f.invoices.filter((_,idx)=>idx!==i) })), []);
 
-  const addPayEntry = useCallback(() => setForm(f => ({
-    ...f,
-    paymentEntries: [...(f.paymentEntries||[]), {
-      id:GEN_ID(), name:"", type:"CEO", status:"Pending",
-      totalOwed:"", amountGiven:"", currency:"BDT", channel:"", notes:"", proofs:[],
-      createdAt:TS(),
-    }],
-  })), []);
-
   const updatePayEntry = useCallback((i, updated) => setForm(f => ({
     ...f,
     paymentEntries: f.paymentEntries.map((e,idx) => idx===i ? updated : e),
@@ -219,20 +204,87 @@ export default function ProjectModal({ project, currencies, onSave, onClose }) {
     paymentEntries: f.paymentEntries.filter((_,idx) => idx!==i),
   })), []);
 
+  /* ── Smart quick-add buttons ────────────────────────────
+     Each button pre-fills a payment entry from the project
+     data already entered above. All fields remain editable.
+  ─────────────────────────────────────────────────────── */
+  const buildEntry = useCallback((overrides = {}) => ({
+    id: GEN_ID(),
+    name: "",
+    type: "CEO",
+    status: "Pending",
+    totalOwed: "",
+    amountGiven: "",
+    currency: form.currency || "BDT",
+    channel: form.paymentChannel || "",
+    notes: "",
+    proofs: [],
+    createdAt: TS(),
+    ...overrides,
+  }), [form.currency, form.paymentChannel]);
+
+  /* Adds a context-aware entry based on workerType */
+  const addSmartEntry = useCallback((preset) => {
+    setShowPaySec(true);
+    setForm(f => {
+      const shares = calcShares(f, currencies);
+      let entry;
+
+      if (preset === "sumaiya") {
+        entry = buildEntry({
+          name: "Sumaiya",
+          type: "CEO",
+          totalOwed: FMT2(shares.sShare),   // BDT share
+          currency: "BDT",
+          channel: f.paymentChannel || "",
+        });
+      } else if (preset === "rakib") {
+        entry = buildEntry({
+          name: "Rakib",
+          type: "CEO",
+          totalOwed: FMT2(shares.rShare),   // BDT share
+          currency: "BDT",
+          channel: f.paymentChannel || "",
+        });
+      } else if (preset === "worker") {
+        entry = buildEntry({
+          name: f.workerName || "Worker",
+          type: "Contractor",
+          totalOwed: f.workerBudget || "",
+          currency: f.currency || "BDT",
+          channel: f.paymentChannel || "",
+        });
+      } else {
+        // blank fallback
+        entry = buildEntry();
+      }
+
+      return { ...f, paymentEntries: [...(f.paymentEntries||[]), entry] };
+    });
+  }, [buildEntry, currencies]);
+
+  const handleClientSelect = useCallback((c) => {
+    setForm(f => ({ ...f, clientId: c?.id || "", clientName: c?.name || "" }));
+  }, []);
+
+  const handleWorkerSelect = useCallback((e) => {
+    setForm(f => ({ ...f, workerId: e?.id || "", workerName: e?.name || "" }));
+  }, []);
+
   const handleSave = useCallback(() => {
     if (!form.name.trim()) { alert("Project name required"); return; }
     if (!parseFloat(form.totalBudget)) { alert("Total budget must be > 0"); return; }
     onSave({
       ...form,
-      id:           form.id || GEN_ID(),
-      totalBudget:  parseFloat(form.totalBudget)  || 0,
-      workerBudget: parseFloat(form.workerBudget) || 0,
-      tax:          parseFloat(form.tax)          || 0,
-      manualRate:   parseFloat(form.manualRate)   || 0,
-      invoices:     form.invoices     || [],
+      id:             form.id || GEN_ID(),
+      totalBudget:    parseFloat(form.totalBudget)  || 0,
+      workerBudget:   parseFloat(form.workerBudget) || 0,
+      tax:            parseFloat(form.tax)          || 0,
+      manualRate:     parseFloat(form.manualRate)   || 0,
+      invoices:       form.invoices       || [],
       paymentEntries: form.paymentEntries || [],
-      createdAt:    form.createdAt || TS(),
-      updatedAt:    TS(),
+      createdAt:      form.createdAt || TS(),
+      updatedAt:      TS(),
     });
   }, [form, onSave]);
 
@@ -240,6 +292,25 @@ export default function ProjectModal({ project, currencies, onSave, onClose }) {
     (form.paymentEntries||[]).filter(e=>e.status==="Pending"||e.status==="Partial").length,
     [form.paymentEntries]
   );
+
+  /* Determine which quick-add buttons to show */
+  const quickBtns = useMemo(() => {
+    const btns = [];
+    if (form.workerType === "ceo_sumaiya") {
+      btns.push({ preset:"sumaiya", label:"+ Sumaiya", color:"#ec4899" });
+      btns.push({ preset:"rakib",   label:"+ Rakib",   color:"#3b82f6" });
+    } else if (form.workerType === "ceo_rakib") {
+      btns.push({ preset:"sumaiya", label:"+ Sumaiya", color:"#ec4899" });
+      btns.push({ preset:"rakib",   label:"+ Rakib",   color:"#3b82f6" });
+    } else if (form.workerType === "external") {
+      btns.push({ preset:"sumaiya", label:"+ Sumaiya", color:"#ec4899" });
+      btns.push({ preset:"rakib",   label:"+ Rakib",   color:"#3b82f6" });
+      btns.push({ preset:"worker",  label:`+ ${form.workerName || "Worker"}`, color:"#10b981" });
+    }
+    // always show a blank fallback
+    btns.push({ preset:"blank", label:"+ Blank Entry", color:"#64748b" });
+    return btns;
+  }, [form.workerType, form.workerName]);
 
   return (
     <div style={{ position:"fixed", inset:0, background:pal.overlay, zIndex:1000, display:"flex", alignItems:"flex-start", justifyContent:"center", padding:"24px 16px", overflowY:"auto" }}>
@@ -259,6 +330,7 @@ export default function ProjectModal({ project, currencies, onSave, onClose }) {
         {/* Body */}
         <div style={{ padding:"28px 32px" }}>
           <div className="modal-grid">
+
             {/* LEFT */}
             <div>
               <FormSec title="Project Info">
@@ -280,16 +352,53 @@ export default function ProjectModal({ project, currencies, onSave, onClose }) {
                 </FormField>
               </FormSec>
 
+              {/* ── Client ── */}
+              <FormSec title="Client">
+                {clients.length > 0 && (
+                  <EntityPicker
+                    label="Quick-fill from saved client"
+                    items={clients}
+                    selectedId={form.clientId}
+                    onSelect={handleClientSelect}
+                    renderItem={(c) => ({
+                      primary:   c.name,
+                      secondary: [c.email, c.city].filter(Boolean).join(" · "),
+                      badge:     c.industry,
+                    })}
+                    accentColor="#06b6d4"
+                  />
+                )}
+                <FormField label="Client Name">
+                  <input style={inp} value={form.clientName} onChange={e=>set("clientName",e.target.value)} placeholder="Company or person name"/>
+                </FormField>
+              </FormSec>
+
+              {/* ── Worker ── */}
               <FormSec title="Project Worker">
                 <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:8, marginBottom:12 }}>
                   {WORKER_OPTS.map(o=>(
-                    <button key={o.v} onClick={()=>set("workerType",o.v)} style={{ padding:"10px 4px", borderRadius:10, border:`2px solid ${form.workerType===o.v?o.color:"rgba(128,128,128,0.2)"}`, background:form.workerType===o.v?o.color+"18":"transparent", color:form.workerType===o.v?o.color:pal.textMute, cursor:"pointer", fontSize:12, fontWeight:700, transition:"all 0.15s" }}>{o.l}</button>
+                    <button key={o.v} onClick={()=>{
+                      if (o.v !== "external") setForm(f => ({ ...f, workerType:o.v, workerName:"", workerId:"" }));
+                      else set("workerType", o.v);
+                    }} style={{ padding:"10px 4px", borderRadius:10, border:`2px solid ${form.workerType===o.v?o.color:"rgba(128,128,128,0.2)"}`, background:form.workerType===o.v?o.color+"18":"transparent", color:form.workerType===o.v?o.color:pal.textMute, cursor:"pointer", fontSize:12, fontWeight:700, transition:"all 0.15s" }}>{o.l}</button>
                   ))}
                 </div>
                 {form.workerType==="external" && (
-                  <FormField label="Worker Name">
-                    <input style={inp} value={form.workerName} onChange={e=>set("workerName",e.target.value)} placeholder="Freelancer / worker name"/>
-                  </FormField>
+                  <>
+                    {employees.length > 0 && (
+                      <EntityPicker
+                        label="Quick-fill from saved employee"
+                        items={employees}
+                        selectedId={form.workerId}
+                        onSelect={handleWorkerSelect}
+                        renderItem={(e) => ({ primary:e.name, secondary:e.role, badge:e.status })}
+                        accentColor="#10b981"
+                      />
+                    )}
+                    <FormField label="Worker Name">
+                      <input style={inp} value={form.workerName} onChange={e=>set("workerName",e.target.value)} placeholder="Freelancer / worker name"/>
+                    </FormField>
+                  </>
                 )}
               </FormSec>
 
@@ -385,7 +494,7 @@ export default function ProjectModal({ project, currencies, onSave, onClose }) {
             </div>
           </div>
 
-          {/* ── OPTIONAL: Payment Tracking Section ── */}
+          {/* ── Payment Tracking ── */}
           <div style={{ marginTop:8, borderTop:`1px solid ${pal.border}`, paddingTop:20 }}>
             <button
               onClick={()=>setShowPaySec(s=>!s)}
@@ -422,12 +531,31 @@ export default function ProjectModal({ project, currencies, onSave, onClose }) {
                     inp={inp} pal={pal}
                   />
                 ))}
-                <button
-                  onClick={addPayEntry}
-                  style={{ display:"flex", alignItems:"center", gap:8, padding:"11px 18px", background:"rgba(16,185,129,0.1)", border:"1px dashed rgba(16,185,129,0.35)", borderRadius:12, color:"#10b981", cursor:"pointer", fontSize:13, fontWeight:700, fontFamily:"inherit", width:"100%", justifyContent:"center" }}
-                >
-                  <Plus size={15}/> Add Payment Entry
-                </button>
+
+                {/* ── Smart quick-add buttons ── */}
+                <div style={{ marginTop: 4 }}>
+                  <div style={{ fontSize:10, fontWeight:800, color:pal.textMute, textTransform:"uppercase", letterSpacing:0.8, marginBottom:8 }}>
+                    Add entry pre-filled from project above:
+                  </div>
+                  <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                    {quickBtns.map(btn => (
+                      <button
+                        key={btn.preset}
+                        onClick={() => addSmartEntry(btn.preset)}
+                        style={{
+                          display:"flex", alignItems:"center", gap:6,
+                          padding:"9px 16px", borderRadius:10, fontFamily:"inherit",
+                          border:`1px dashed ${btn.color}55`,
+                          background: btn.color + "10",
+                          color: btn.color,
+                          cursor:"pointer", fontSize:12, fontWeight:700,
+                        }}
+                      >
+                        {btn.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
           </div>

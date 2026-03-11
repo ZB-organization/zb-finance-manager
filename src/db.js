@@ -430,6 +430,134 @@ export async function deletePayment(id) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// Clients
+// ══════════════════════════════════════════════════════════════════════
+/**
+ * db.clients.patch.js — Step 1 of Client Profiles
+ *
+ * HOW TO USE:
+ *   Open src/db.js and paste the three functions below
+ *   anywhere alongside the existing loadExpenses / saveExpense block.
+ *   They follow exactly the same localStorage / Firebase pattern.
+ *
+ * Then in App.jsx add to the db import block:
+ *   import { ..., loadClients, saveClient, deleteClient } from "./db";
+ */
+
+// ── key used in localStorage / Firestore ──────────────────────
+const CLIENTS_KEY = "zb_clients";
+
+/**
+ * Load all clients.
+ * Returns [] if nothing saved yet.
+ */
+export async function loadClients() {
+  // ── localStorage adapter ────────────────────────────────────
+  try {
+    const raw = localStorage.getItem(CLIENTS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+
+  // ── Firebase adapter (uncomment if using Firestore) ─────────
+  // const snap = await getDocs(collection(db, "clients"));
+  // return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+/**
+ * Save (upsert) a single client.
+ * If client.id already exists in the array it is replaced, otherwise appended.
+ */
+export async function saveClient(client) {
+  // ── localStorage adapter ────────────────────────────────────
+  const all = await loadClients();
+  const idx = all.findIndex(c => c.id === client.id);
+  if (idx >= 0) all[idx] = client;
+  else all.push(client);
+  localStorage.setItem(CLIENTS_KEY, JSON.stringify(all));
+
+  // ── Firebase adapter ────────────────────────────────────────
+  // await setDoc(doc(db, "clients", client.id), client);
+}
+
+/**
+ * Delete a client by id.
+ */
+export async function deleteClient(id) {
+  // ── localStorage adapter ────────────────────────────────────
+  const all = await loadClients();
+  localStorage.setItem(CLIENTS_KEY, JSON.stringify(all.filter(c => c.id !== id)));
+
+  // ── Firebase adapter ────────────────────────────────────────
+  // await deleteDoc(doc(db, "clients", id));
+}
+
+
+
+// ══════════════════════════════════════════════════════════════════════
+// EMPLOYEES
+// ══════════════════════════════════════════════════════════════════════
+/**
+ * db.employees.patch.js — Step 1 of Employee Profiles
+ *
+ * HOW TO USE:
+ *   Open src/db.js and paste the three functions below
+ *   anywhere alongside the existing loadClients / saveClient block.
+ *   They follow exactly the same localStorage / Firebase pattern.
+ *
+ * Then in App.jsx add to the db import block:
+ *   import { ..., loadEmployees, saveEmployee, deleteEmployee } from "./db";
+ */
+
+const EMPLOYEES_KEY = "zb_employees";
+
+/**
+ * Load all employees.
+ * Returns [] if nothing saved yet.
+ */
+export async function loadEmployees() {
+  // ── localStorage adapter ────────────────────────────────────
+  try {
+    const raw = localStorage.getItem(EMPLOYEES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+
+  // ── Firebase adapter (uncomment if using Firestore) ─────────
+  // const snap = await getDocs(collection(db, "employees"));
+  // return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+/**
+ * Save (upsert) a single employee.
+ * If employee.id already exists it is replaced, otherwise appended.
+ */
+export async function saveEmployee(employee) {
+  // ── localStorage adapter ────────────────────────────────────
+  const all = await loadEmployees();
+  const idx = all.findIndex(e => e.id === employee.id);
+  if (idx >= 0) all[idx] = employee;
+  else all.push(employee);
+  localStorage.setItem(EMPLOYEES_KEY, JSON.stringify(all));
+
+  // ── Firebase adapter ────────────────────────────────────────
+  // await setDoc(doc(db, "employees", employee.id), employee);
+}
+
+/**
+ * Delete an employee by id.
+ */
+export async function deleteEmployee(id) {
+  // ── localStorage adapter ────────────────────────────────────
+  const all = await loadEmployees();
+  localStorage.setItem(EMPLOYEES_KEY, JSON.stringify(all.filter(e => e.id !== id)));
+
+  // ── Firebase adapter ────────────────────────────────────────
+  // await deleteDoc(doc(db, "employees", id));
+}
+// ══════════════════════════════════════════════════════════════════════
 // EXPENSES
 // ══════════════════════════════════════════════════════════════════════
 export async function loadExpenses() {

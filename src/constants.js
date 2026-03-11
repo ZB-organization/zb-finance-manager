@@ -193,6 +193,63 @@ export const PERSON_TYPES = [
   "Vendor",
 ];
 
+/* ── Employees ─────────────────────────────────────────────── */
+export const EMPLOYEE_ROLES = [
+  "Developer",
+  "Designer",
+  "Project Manager",
+  "Content Writer",
+  "SEO Specialist",
+  "Marketing",
+  "Video Editor",
+  "Motion Designer",
+  "UI/UX Designer",
+  "QA Tester",
+  "DevOps",
+  "Data Analyst",
+  "Virtual Assistant",
+  "Contractor",
+  "Freelancer",
+  "Intern",
+  "Other",
+];
+
+export const EMPLOYEE_STATUSES = ["Active", "On Leave", "Inactive", "Alumni"];
+export const EMPLOYEE_STATUS_COL = {
+  Active:   "#10b981",
+  "On Leave": "#f59e0b",
+  Inactive: "#64748b",
+  Alumni:   "#8b5cf6",
+};
+
+/** Payment channels available to an employee (freeform, stored per-employee) */
+export const EMPLOYEE_BLANK = {
+  // Identity
+  name:          "",
+  role:          EMPLOYEE_ROLES[0],
+  status:        "Active",
+  photo:         "",          // base64 portrait
+  // Contact
+  email:         "",
+  phone:         "",
+  address:       "",
+  city:          "",
+  country:       "",
+  // Work
+  startDate:     "",
+  endDate:       "",          // blank = still active
+  hiredBy:       "Both",     // "Sumaiya" | "Rakib" | "Both"
+  defaultRate:   "",          // numeric, in defaultCurrency
+  defaultCurrency: "USD",
+  // Payment channels (array of { id, label, details } objects)
+  paymentChannels: [],
+  notes:         "",
+  // Meta
+  id:            "",
+  createdAt:     "",
+  updatedAt:     "",
+};
+
 /* ── Expenses ──────────────────────────────────────────────── */
 export const EXPENSE_CATS = [
   "Software / SaaS",
@@ -217,23 +274,54 @@ export const COMPANY = {
   website: "www.zbcompany.com",
   address: "Dhaka, Bangladesh",
 };
+/* ===========================================
+CLIENT
+===========================================*/
+export const CLIENT_INDUSTRIES = [
+  "Technology", "Design", "Marketing", "Finance", "Legal",
+  "Healthcare", "Education", "E-commerce", "Media", "Consulting", "Other",
+];
+
+export const CLIENT_BLANK = {
+  id: "",
+  name: "",
+  contactName: "",
+  industry: "Other",
+  currency: "USD",
+  email: "",
+  phone: "",
+  website: "",
+  taxId: "",
+  address: "",
+  city: "",
+  country: "",
+  notes: "",
+  createdAt: "",
+  updatedAt: "",
+};
 
 /* ── Changelog ─────────────────────────────────────────────── */
 export const CHANGELOG = [
   {
-    v: "1.6.0",
-    date: "2026-03-11",
+    v: "2.0.0",
+    date: "2026-03-12",
     changes: [
-      "Reports page — monthly & yearly calculations table for all projects and expenses",
-      "Period navigator: prev/next arrows + quick month/year dropdowns",
-      "Projects table: date, budget, BDT, tax, net, Sumaiya share, Rakib share, channel, rule, status",
-      "Expenses table: date, description, category, paid by, currency, amount, BDT, settlement flag",
-      "Overview KPI cards: Project Revenue, Net after tax, CEO earnings, Total Expenses, Net P&L",
-      "Search bar filters both tables simultaneously across all text fields",
-      "Filter panel: paid-by (expenses), category (expenses), status (projects)",
-      "Export to CSV: projects + expenses as two sections in one file, named by period",
-      "Invoice Gen: branded layout with logo upload, accent color picker, live preview, browser print",
-      "Invoice Gen: Bengali and all Unicode languages now fully supported (no jsPDF cutoff)",
+      "Employee Profiles — data layer: EMPLOYEE_BLANK shape, EMPLOYEE_ROLES, EMPLOYEE_STATUSES added to constants",
+      "db.js: loadEmployees(), saveEmployee(), deleteEmployee() functions (see db.employees.patch.js)",
+      "Employee fields: name, role, status, photo (base64), email, phone, address, start/end date, hired by, default rate/currency, payment channels, notes",
+      "Foundation for Step 2 (Employees page), Step 3 (linked projects), Step 4 (earnings stats)",
+    ],
+  },
+  {
+    v: "1.9.0",
+    date: "2026-03-12",
+    changes: [
+      "Client Profiles page — full list with search, industry filter, add/edit/delete",
+      "Client detail panel — contact info, invoice fields, linked projects with revenue stats",
+      "Client → Invoice shortcut — 'Create Invoice' button pre-fills Bill To instantly",
+      "Invoice Gen: client picker dropdown in Bill To — auto-fills all fields from saved client",
+      "Invoice Gen: expanded Bill To — contact name, phone, city, country, client Tax ID",
+      "Sidebar: Clients nav item (purple) between Invoice Gen and dividers",
     ],
   },
   {

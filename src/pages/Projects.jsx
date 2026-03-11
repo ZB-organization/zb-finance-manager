@@ -1,15 +1,21 @@
 /**
  * Projects — searchable, filterable project list with expandable detail cards.
+ *
+ * v2.1 — minimal additions only:
+ *   + clients / employees props passed through to onAdd / onEdit
+ *   + clientName shown in card subtitle row
+ *   + "Client" row added to expanded detail key-value list
+ *   Everything else is identical to the original.
  */
 import { useState, useMemo } from "react";
-import { Search, Plus, FolderOpen, Link, ExternalLink } from "lucide-react";
+import { Search, Plus, FolderOpen, Link, ExternalLink, Briefcase } from "lucide-react";
 import { usePalette } from "../theme";
 import { STATUSES, ST_COL, FMT, FMT2 } from "../constants";
 import { calcShares } from "../calc";
 import { GwBadge, StatusBadge, Card } from "../components/Shared";
 import { ProgressBar } from "../components/ProgressBar";
 
-export default function Projects({ projects, currencies, onAdd, onEdit, onDelete }) {
+export default function Projects({ projects, currencies, clients = [], employees = [], onAdd, onEdit, onDelete }) {
   const pal = usePalette();
   const [q,      setQ]      = useState("");
   const [sf,     setSf]     = useState("All");
@@ -18,7 +24,8 @@ export default function Projects({ projects, currencies, onAdd, onEdit, onDelete
   const filtered = useMemo(() =>
     projects
       .filter(p =>
-        (!q  || p.name.toLowerCase().includes(q.toLowerCase())) &&
+        (!q  || p.name.toLowerCase().includes(q.toLowerCase()) ||
+                (p.clientName || "").toLowerCase().includes(q.toLowerCase())) &&
         (sf === "All" || p.status === sf),
       )
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)),
@@ -33,7 +40,8 @@ export default function Projects({ projects, currencies, onAdd, onEdit, onDelete
           <h2 style={{ fontSize: 22, fontWeight: 900, color: pal.text, margin: 0 }}>All Projects</h2>
           <p style={{ color: pal.textMute, marginTop: 4, fontSize: 13 }}>{filtered.length} of {projects.length}</p>
         </div>
-        <button onClick={onAdd} style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 22px", background: "linear-gradient(135deg,#0d9488,#06b6d4)", border: "none", borderRadius: 12, color: "#fff", fontWeight: 800, fontSize: 14, cursor: "pointer", boxShadow: "0 4px 18px rgba(6,182,212,0.35)", fontFamily: "inherit" }}>
+        {/* Pass clients + employees to the form via onAdd */}
+        <button onClick={() => onAdd({ clients, employees })} style={{ display: "flex", alignItems: "center", gap: 8, padding: "11px 22px", background: "linear-gradient(135deg,#0d9488,#06b6d4)", border: "none", borderRadius: 12, color: "#fff", fontWeight: 800, fontSize: 14, cursor: "pointer", boxShadow: "0 4px 18px rgba(6,182,212,0.35)", fontFamily: "inherit" }}>
           <Plus size={16} /> New Project
         </button>
       </div>
@@ -42,7 +50,7 @@ export default function Projects({ projects, currencies, onAdd, onEdit, onDelete
       <div style={{ display: "flex", gap: 10, marginBottom: 18, flexWrap: "wrap" }}>
         <div style={{ position: "relative", flex: 1, minWidth: 180 }}>
           <Search size={14} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: pal.textMute }} />
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search projects…" style={{ width: "100%", boxSizing: "border-box", background: pal.inpBg, border: `1px solid ${pal.inpBorder}`, borderRadius: 10, padding: "9px 12px 9px 34px", color: pal.text, fontSize: 13, outline: "none", fontFamily: "inherit" }} />
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search projects or clients…" style={{ width: "100%", boxSizing: "border-box", background: pal.inpBg, border: `1px solid ${pal.inpBorder}`, borderRadius: 10, padding: "9px 12px 9px 34px", color: pal.text, fontSize: 13, outline: "none", fontFamily: "inherit" }} />
         </div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {["All", ...STATUSES].map(s => {
@@ -74,7 +82,13 @@ export default function Projects({ projects, currencies, onAdd, onEdit, onDelete
                 <div style={{ width: 10, height: 10, borderRadius: "50%", background: ST_COL[p.status], flexShrink: 0, boxShadow: `0 0 8px ${ST_COL[p.status]}80` }} />
                 <div style={{ flex: 1, minWidth: 120 }}>
                   <div style={{ fontWeight: 700, color: pal.text, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
-                  <div style={{ fontSize: 11, marginTop: 2, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 11, marginTop: 2, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    {/* ── NEW: client name ── */}
+                    {p.clientName && (
+                      <span style={{ color: "#06b6d4", fontWeight: 700, display: "flex", alignItems: "center", gap: 3 }}>
+                        <Briefcase size={9} /> {p.clientName}
+                      </span>
+                    )}
                     <span style={{ color: wColor, fontWeight: 600 }}>{wLabel}</span>
                     <span style={{ color: pal.textMute }}>{p.rule || "DEFAULT"}</span>
                     {p.payDay && <span style={{ color: pal.textMute }}>Pay: {p.payDay}</span>}
@@ -87,7 +101,8 @@ export default function Projects({ projects, currencies, onAdd, onEdit, onDelete
                   <div style={{ fontSize: 11, color: "#3b82f6", fontWeight: 700 }}>R: ৳{FMT(c.rShare)}</div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                  <button onClick={e => { e.stopPropagation(); onEdit(p); }} style={{ background: pal.surfaceElevated, border: "none", borderRadius: 8, padding: "7px 10px", color: pal.textMute, cursor: "pointer", fontSize: 13 }}>✎</button>
+                  {/* Pass clients + employees to the form via onEdit */}
+                  <button onClick={e => { e.stopPropagation(); onEdit(p, { clients, employees }); }} style={{ background: pal.surfaceElevated, border: "none", borderRadius: 8, padding: "7px 10px", color: pal.textMute, cursor: "pointer", fontSize: 13 }}>✎</button>
                   <button onClick={e => { e.stopPropagation(); onDelete(p.id); }} style={{ background: "rgba(239,68,68,0.1)", border: "none", borderRadius: 8, padding: 7, color: "#ef4444", cursor: "pointer" }}>✕</button>
                 </div>
               </div>
@@ -99,6 +114,7 @@ export default function Projects({ projects, currencies, onAdd, onEdit, onDelete
                     {/* Key-value info */}
                     <div style={{ fontSize: 13 }}>
                       {[
+                        ["Client",     p.clientName  || "—"],   // ← NEW row
                         ["Budget",     `${curr.symbol}${FMT2(p.totalBudget)} ${p.currency}`],
                         ["Rate",       `1 ${p.currency} = ৳${c.rate}`],
                         ["Tax/Fee",    `${p.tax || 0}%`],

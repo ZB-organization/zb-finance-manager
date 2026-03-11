@@ -30,6 +30,12 @@ import {
   saveChannels,
   getSession,
   clearSession,
+  loadClients,
+  saveClient,
+  deleteClient,
+  loadEmployees,
+  saveEmployee,
+  deleteEmployee,
 } from "./db";
 import { DEF_CURRENCIES, DEF_CHANNELS, GEN_ID, FMT, TS } from "./constants";
 import { calcDebt } from "./calc";
@@ -52,6 +58,8 @@ import Payments from "./pages/Payments";
 import Expenses from "./pages/Expenses";
 import InvoiceGen from "./pages/InvoiceGen";
 import Reports from "./pages/Reports";
+import Clients from "./pages/Clients";
+import Employees from "./pages/Employees";
 
 /* ════════════════════════════════════════════════════════════
    APP INNER — data layer + routing shell
@@ -70,6 +78,9 @@ function AppInner({ onLogout }) {
   const [ceoImages, setCeoImages] = useState({ sumaiya: null, rakib: null });
   const [paymentMethods, setPaymentMethods] = useState([]);
   const [channels, setChannels] = useState(DEF_CHANNELS);
+  const [clients, setClients] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  const [preselectedClient, setPreselectedClient] = useState(null);
   const [modal, setModal] = useState(null);
   const [showCL, setShowCL] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -95,8 +106,10 @@ function AppInner({ onLogout }) {
       loadPaymentMethods(),
       loadSettlements(),
       loadChannels(),
+      loadClients(),
+      loadEmployees(),
     ])
-      .then(([p, c, e, sb, ci, pm, _settlements, ch]) => {
+      .then(([p, c, e, sb, ci, pm, _settlements, ch, cl, emp]) => {
         setProjects(p);
         // Guard: if DB returns nothing (first launch), keep DEF_CURRENCIES
         setCurrencies(c && c.length > 0 ? c : DEF_CURRENCIES);
@@ -105,6 +118,8 @@ function AppInner({ onLogout }) {
         setCeoImages(ci || { sumaiya: null, rakib: null });
         setPaymentMethods(pm || []);
         setChannels(ch || DEF_CHANNELS);
+        setClients(cl || []);
+        setEmployees(emp || []);
         setLoading(false);
         notify({
           id: tid,
@@ -273,6 +288,124 @@ function AppInner({ onLogout }) {
     setExpenses(await loadExpenses());
   }, []);
 
+  /* ── Client handlers ── */
+  const handleClientSave = useCallback(
+    async (client) => {
+      const isNew = !client.createdAt || client.createdAt === client.updatedAt;
+      const tid = notify({
+        type: "loading",
+        message: isNew
+          ? `Adding "${client.name}"…`
+          : `Saving "${client.name}"…`,
+      });
+      try {
+        await saveClient(client);
+        setClients(await loadClients());
+        flashSave();
+        notify({
+          id: tid,
+          type: "success",
+          message: isNew ? `"${client.name}" added` : `"${client.name}" saved`,
+        });
+        addLog({
+          type: isNew ? "CLIENT_CREATED" : "CLIENT_UPDATED",
+          detail: `Client "${client.name}"`,
+        });
+      } catch {
+        notify({ id: tid, type: "error", message: "Client save failed" });
+      }
+    },
+    [notify, flashSave, addLog],
+  );
+
+  const handleClientDelete = useCallback(
+    async (id) => {
+      const c = clients.find((x) => x.id === id);
+      const tid = notify({
+        type: "loading",
+        message: `Deleting "${c?.name}"…`,
+      });
+      try {
+        await deleteClient(id);
+        setClients(await loadClients());
+        flashSave();
+        notify({ id: tid, type: "success", message: `"${c?.name}" deleted` });
+        addLog({
+          type: "CLIENT_DELETED",
+          detail: `Client "${c?.name || id}" deleted`,
+        });
+      } catch {
+        notify({ id: tid, type: "error", message: "Client delete failed" });
+      }
+    },
+    [clients, notify, flashSave, addLog],
+  );
+
+  /**
+   * Called from Clients page "Create Invoice" button.
+   * Switches to invoice tab with client pre-filled.
+   */
+  const handleCreateInvoice = useCallback((client) => {
+    setPreselectedClient(client);
+    setTab("invoice");
+  }, []);
+
+  /* ── Employee handlers ── */
+  const handleEmployeeSave = useCallback(
+    async (employee) => {
+      const isNew =
+        !employee.createdAt || employee.createdAt === employee.updatedAt;
+      const tid = notify({
+        type: "loading",
+        message: isNew
+          ? `Adding "${employee.name}"…`
+          : `Saving "${employee.name}"…`,
+      });
+      try {
+        await saveEmployee(employee);
+        setEmployees(await loadEmployees());
+        flashSave();
+        notify({
+          id: tid,
+          type: "success",
+          message: isNew
+            ? `"${employee.name}" added`
+            : `"${employee.name}" saved`,
+        });
+        addLog({
+          type: isNew ? "EMPLOYEE_CREATED" : "EMPLOYEE_UPDATED",
+          detail: `Employee "${employee.name}"`,
+        });
+      } catch {
+        notify({ id: tid, type: "error", message: "Employee save failed" });
+      }
+    },
+    [notify, flashSave, addLog],
+  );
+
+  const handleEmployeeDelete = useCallback(
+    async (id) => {
+      const emp = employees.find((x) => x.id === id);
+      const tid = notify({
+        type: "loading",
+        message: `Deleting "${emp?.name}"…`,
+      });
+      try {
+        await deleteEmployee(id);
+        setEmployees(await loadEmployees());
+        flashSave();
+        notify({ id: tid, type: "success", message: `"${emp?.name}" deleted` });
+        addLog({
+          type: "EMPLOYEE_DELETED",
+          detail: `Employee "${emp?.name || id}" deleted`,
+        });
+      } catch {
+        notify({ id: tid, type: "error", message: "Employee delete failed" });
+      }
+    },
+    [employees, notify, flashSave, addLog],
+  );
+
   /* ── Sidebar debt badge ── */
   const appDebt = useMemo(
     () =>
@@ -439,9 +572,11 @@ function AppInner({ onLogout }) {
             <Projects
               projects={projects}
               currencies={currencies}
-              onAdd={() => setModal({})}
-              onEdit={(p) => setModal({ project: p })}
+              onAdd={() => setModal({ clients, employees })}
+              onEdit={(p) => setModal({ project: p, clients, employees })}
               onDelete={handleDelete}
+              clients={clients} // ← add this
+              employees={employees} // ← add this
             />
           )}
           {tab === "sumaiya" && (
@@ -480,11 +615,36 @@ function AppInner({ onLogout }) {
             <InvoiceGen
               currencies={currencies}
               projects={projects}
+              clients={clients}
+              preselectedClient={preselectedClient}
               onLog={addLog}
             />
           )}
+          {tab === "clients" && (
+            <Clients
+              clients={clients}
+              projects={projects}
+              currencies={currencies}
+              onSave={handleClientSave}
+              onDelete={handleClientDelete}
+              onCreateInvoice={handleCreateInvoice}
+            />
+          )}
+          {tab === "employees" && (
+            <Employees
+              employees={employees}
+              projects={projects}
+              currencies={currencies}
+              onSave={handleEmployeeSave}
+              onDelete={handleEmployeeDelete}
+            />
+          )}
           {tab === "reports" && (
-            <Reports projects={projects} currencies={currencies} />
+            <Reports
+              projects={projects}
+              currencies={currencies}
+              expenses={expenses}
+            />
           )}
           {tab === "activity" && <ActivityLog />}
           {tab === "settings" && (
@@ -533,6 +693,8 @@ function AppInner({ onLogout }) {
           <ProjectModal
             project={modal.project}
             currencies={currencies}
+            clients={modal.clients || []}
+            employees={modal.employees || []}
             onSave={handleSave}
             onClose={() => setModal(null)}
           />
