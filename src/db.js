@@ -533,32 +533,43 @@ export async function loadCEOImages() {
 }
 
 export async function saveCEOImages(imgs) {
-  // Compress each photo separately — keeps each doc well under Firestore 1MB limit
+  // Get existing saved images so we don't re-compress unchanged ones
+  const existing = ls.get(_K.ceoImages) || { sumaiya: null, rakib: null };
+
+  // Only compress a CEO's image if it actually changed
+  // (different reference = new upload; same string = unchanged)
+  const sumaiyaChanged = imgs.sumaiya !== existing.sumaiya;
+  const rakibChanged = imgs.rakib !== existing.rakib;
+
   const compressed = {
-    sumaiya: await compressImage(imgs.sumaiya, 200, 0.72),
-    rakib: await compressImage(imgs.rakib, 200, 0.72),
+    sumaiya: sumaiyaChanged
+      ? await compressImage(imgs.sumaiya, 200, 0.72)
+      : existing.sumaiya,
+    rakib: rakibChanged
+      ? await compressImage(imgs.rakib, 200, 0.72)
+      : existing.rakib,
   };
 
   // 1. localStorage — instant, always works
   ls.set(_K.ceoImages, compressed);
 
-  // 2. Firestore — one doc per CEO (same fire-and-forget pattern as saveChannels)
-  // Storing each image in its own document avoids any combined size issues
+  // 2. Firestore — only push the doc that actually changed
   await initFirebase();
   if (_fbReady) {
-    if (compressed.sumaiya !== undefined) {
+    if (sumaiyaChanged) {
       _fsSave("config", "ceoImage_sumaiya", {
         data: compressed.sumaiya,
         updatedAt: new Date().toISOString(),
       });
+      console.info("[ZBFinance] Sumaiya image queued for Firestore ✓");
     }
-    if (compressed.rakib !== undefined) {
+    if (rakibChanged) {
       _fsSave("config", "ceoImage_rakib", {
         data: compressed.rakib,
         updatedAt: new Date().toISOString(),
       });
+      console.info("[ZBFinance] Rakib image queued for Firestore ✓");
     }
-    console.info("[ZBFinance] CEO images queued for Firestore sync ✓");
   }
 
   return compressed;

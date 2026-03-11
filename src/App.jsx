@@ -4709,7 +4709,8 @@ function AppInner({ onLogout }) {
     ])
       .then(([p, c, e, sb, ci, pm, settlements, ch]) => {
         setProjects(p);
-        setCurrencies(c);
+        // Guard: if DB returns nothing (first launch or corrupted), keep DEF_CURRENCIES
+        setCurrencies(c && c.length > 0 ? c : DEF_CURRENCIES);
         setExpenses(e);
         setSettledBaseline(sb);
         setCeoImages(ci || { sumaiya: null, rakib: null });
@@ -4846,6 +4847,7 @@ function AppInner({ onLogout }) {
 
   const handleCEOImageChange = useCallback(
     async (who, base64) => {
+      // Optimistic update with raw base64 so UI shows image immediately
       const next = { ...ceoImages, [who]: base64 };
       setCeoImages(next);
       const tid = notify({
@@ -4853,7 +4855,10 @@ function AppInner({ onLogout }) {
         message: `Saving ${who === "sumaiya" ? "Sumaiya" : "Rakib"}'s photo…`,
       });
       try {
-        await saveCEOImages(next);
+        // saveCEOImages returns the compressed version — update state with it
+        // so the in-memory image matches what's in localStorage/Firestore
+        const compressed = await saveCEOImages(next);
+        setCeoImages(compressed);
         flashSave();
         notify({
           id: tid,
@@ -5020,17 +5025,29 @@ function AppInner({ onLogout }) {
           }}
         />
 
-        {/* Mobile nav toggle */}
-        <button
-          className="mobile-nav-toggle"
-          onClick={() => setSidebarOpen((o) => !o)}
+        {/* Mobile header bar — only visible on ≤900px via CSS */}
+        <header
+          className="mobile-header"
+          style={{ background: pal.sidebar, backdropFilter: "blur(20px)" }}
         >
-          {sidebarOpen ? (
-            <X size={20} />
-          ) : (
-            <span style={{ fontSize: 20, lineHeight: 1 }}>☰</span>
-          )}
-        </button>
+          <button
+            className="mobile-nav-toggle"
+            onClick={() => setSidebarOpen((o) => !o)}
+            style={{
+              background: sidebarOpen
+                ? "rgba(239,68,68,0.12)"
+                : "rgba(6,182,212,0.1)",
+              color: sidebarOpen ? "#ef4444" : "#06b6d4",
+            }}
+          >
+            {sidebarOpen ? (
+              <X size={20} />
+            ) : (
+              <span style={{ fontSize: 20, lineHeight: 1 }}>☰</span>
+            )}
+          </button>
+        </header>
+        {/* Overlay behind sidebar on mobile */}
         {sidebarOpen && (
           <div
             className="mobile-overlay"
@@ -5056,8 +5073,9 @@ function AppInner({ onLogout }) {
             zIndex: 100,
           }}
         >
-          {/* Logo */}
+          {/* Logo — hidden on mobile (header bar shows it instead) */}
           <div
+            className="sidebar-logo"
             style={{
               padding: "20px 20px 16px",
               borderBottom: `1px solid ${pal.sidebarBorder}`,
@@ -5345,13 +5363,12 @@ function AppInner({ onLogout }) {
         <main
           className="main-content"
           style={{
-            marginLeft: 228,
             flex: 1,
             padding: "30px 32px",
             position: "relative",
             zIndex: 1,
             minHeight: "100vh",
-            maxWidth: "calc(100vw - 228px)",
+            boxSizing: "border-box",
           }}
         >
           {tab === "dashboard" && (
@@ -5559,6 +5576,122 @@ export default function App() {
           ::-webkit-scrollbar-track { background: transparent; }
           ::-webkit-scrollbar-thumb { background: rgba(148,163,184,0.2); border-radius: 3px; }
           ::-webkit-scrollbar-thumb:hover { background: rgba(148,163,184,0.4); }
+
+          /* ══════════════════════════════════════════════
+             MOBILE LAYOUT
+          ══════════════════════════════════════════════ */
+
+          /* Mobile top bar — hidden on desktop */
+          .mobile-header {
+            display: none;
+          }
+
+          /* Hamburger button — hidden on desktop */
+          .mobile-nav-toggle {
+            display: none;
+          }
+
+          /* Dimmer overlay when sidebar open on mobile */
+          .mobile-overlay {
+            display: none;
+          }
+
+          /* Sidebar: always visible on desktop */
+          .sidebar {
+            transform: translateX(0);
+            transition: transform 0.28s cubic-bezier(0.4,0,0.2,1);
+          }
+
+          /* Main: offset by sidebar width on desktop */
+          .main-content {
+            margin-left: 228px;
+            max-width: calc(100vw - 228px);
+          }
+
+          /* Input / select full width on mobile */
+          @media (max-width: 600px) {
+            input, select, textarea {
+              font-size: 16px !important; /* prevents iOS zoom on focus */
+            }
+          }
+
+          /* ── Tablet (≤ 900px) ── */
+          @media (max-width: 900px) {
+            .sidebar {
+              transform: translateX(-100%);
+              z-index: 300 !important;
+              top: 52px !important;      /* start below the mobile header */
+              box-shadow: 4px 0 32px rgba(0,0,0,0.45);
+            }
+            .sidebar.open {
+              transform: translateX(0);
+            }
+            .sidebar-logo {
+              display: none;            /* header already has the logo */
+            }
+            .mobile-overlay {
+              display: block;
+              position: fixed;
+              inset: 0;
+              background: rgba(0,0,0,0.55);
+              z-index: 299;
+              backdrop-filter: blur(2px);
+            }
+            .main-content {
+              margin-left: 0 !important;
+              max-width: 100vw !important;
+              padding-top: 60px !important;
+            }
+            .mobile-header {
+              display: flex;
+              align-items: center;
+              justify-content: flex-start;
+              position: fixed;
+              top: 0; left: 0; right: 0;
+              height: 52px;
+              padding: 0 12px;
+              z-index: 200;
+              border-bottom: 1px solid rgba(255,255,255,0.06);
+            }
+            .mobile-nav-toggle {
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              width: 40px;
+              height: 40px;
+              border: none;
+              border-radius: 11px;
+              cursor: pointer;
+              flex-shrink: 0;
+              transition: background 0.15s;
+            }
+          }
+
+          /* ── Phone (≤ 600px) ── */
+          @media (max-width: 600px) {
+            .main-content {
+              padding: 68px 12px 80px !important;
+            }
+            /* Collapse multi-col grids to single column */
+            .mobile-grid-1 {
+              grid-template-columns: 1fr !important;
+            }
+            /* Tighten card padding */
+            .mobile-card-tight {
+              padding: 14px !important;
+            }
+            /* Shrink large heading numbers */
+            .mobile-value-lg {
+              font-size: 18px !important;
+            }
+          }
+
+          /* ── Very small (≤ 380px) ── */
+          @media (max-width: 380px) {
+            .main-content {
+              padding: 64px 10px 80px !important;
+            }
+          }
         `}</style>
         <AppRoot />
       </ToastProvider>
